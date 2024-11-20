@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
   Eigen::Quaternionf rotDiff;
   rotDiff.FromTwoVectors(wandEndpoint2, headtoWand);
 
-  auto ROT = Quaternionf::FromTwoVectors(Eigen::Vector3f::UnitZ(), headtoWand);
+  Eigen::Quaternionf ROT = Eigen::Quaternionf::FromTwoVectors(Eigen::Vector3f::UnitZ(), headtoWand);
   //auto rotDiff = rot * Q_wand.conjugate()
 
   Eigen::AngleAxisf rotDiffAngleAxis(rotDiff);
@@ -121,12 +121,9 @@ int main(int argc, char *argv[]) {
   //Eigen::Quaternionf adjustedRot = rotDiff * adjusttoYRot;
   Eigen::Quaternionf adjustedRot = Eigen::Quaternionf::FromTwoVectors(ROT * Y, Y);
 
-
-  auto newRot = adjustedRot * ROT;
+  // new rotation equals the Y rotation * the rotation differance
+  auto newRot = adjustedRot * rotDiff;
   
-
-
-
   std::cout << "Adjusted Rotation:\n" << newRot << std::endl;
   
   std::cout << std::endl;
@@ -188,14 +185,14 @@ int main(int argc, char *argv[]) {
   Eigen::Vector3f temp1 = (reg_samples_world[1] - reg_samples_world[0]);
   Eigen::Vector3f temp2 = (reg_samples_world[2] - reg_samples_world[0]);
   auto a = temp1.cross(temp2);
-  std::cout << a;
+  //std::cout << a;
 
   Eigen::Vector3f X4World = reg_samples_world[0] + a;
 
   temp1 = (reg_samples_tracker[1] - reg_samples_tracker[0]);
   temp2 = (reg_samples_tracker[2] - reg_samples_tracker[0]); 
   auto b = temp1.cross(temp2);
-  std::cout << temp1;
+  //std::cout << temp1;
 
   Eigen::Vector3f X4Tracker = reg_samples_tracker[0] + b;
   
