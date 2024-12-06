@@ -48,13 +48,27 @@ struct MyApp::Impl : public gmCore::Updateable {
   // task6: check intersection and highlight closest
 
   gmGraphics::ObjRenderer* selectedObject = nullptr;
+  gmGraphics::MatrixTransform* selectedObjTransformMat = nullptr;
   gmGraphics::ObjRenderer::Material originalMaterial;
+  
+  //task 9: grabbing
+  bool grabbing = false;
 
   void highlightObj(gmGraphics::ObjRenderer& obj);
 
   void restoreOriginalMat(gmGraphics::ObjRenderer& obj);
 
-  void checkIntersection(const Eigen::Vector3f& wandPos, const Eigen::Vector3f& headPos);
+  void checkIntersection(const Eigen::Vector3f& wandPos, const Eigen::Vector3f& headPos, const Eigen::Quaternionf& wandRot);
+
+  void teleport(const Eigen::Vector3f& direction, const float jumpDist);
+
+  //Task 9:
+  Eigen::Matrix4f Mdelta = Eigen::Matrix4f::Identity(); 
+
+  void grabObj();
+
+  //Task 10:
+  bool HOMERmode = true;
 
   /**
    * From gmCore::Updateable. Automatically called from main() via
@@ -160,17 +174,19 @@ void MyApp::Impl::loadObj(const std::string& filepath,
     objRenderer->setFile(filepath);
     objRenderer->initialize(); 
 
-    //auto transformNode = std::make_shared<gmGraphics::MatrixTransform>();
-    auto transformNoder = std::make_shared<gmGraphics::PoseTransform>();
+    auto transformNoder = std::make_shared<gmGraphics::MatrixTransform>();
+    //auto transformNoder = std::make_shared<gmGraphics::PoseTransform>();
     transformNoder->initialize();
     //transformNode->initialize();
 
     //Eigen::Affine3f transform = Eigen::Affine3f::Identity();
     //transform.scale(scale);
     //transform.translate(pos);
+    Eigen::Affine3f aa = Eigen::Affine3f::Identity();
+    aa.scale(scale);
+    aa.translate(pos);
 
-    transformNoder->setPosition(pos);
-    transformNoder->setScale(scale);
+    transformNoder->setMatrix(aa.matrix());
     //transformNode->setMatrix(transform.matrix());
 
     //gmGraphics::PoseTransform transformr = gmGraphics::PoseTra
@@ -240,21 +256,27 @@ void MyApp::Impl::setup_wand(
   wand = controllers[0];
 }
 
-void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos, const Eigen::Vector3f& headPos)
+void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos,
+    const Eigen::Vector3f& headPos,
+    const Eigen::Quaternionf& wandRot)
 {
-    //unsure where we want to send the ray from the wand. 
 
     Eigen::Vector3f rayDir = (wandPos - headPos).normalized();
+    if (HOMERmode && !grabbing) {
+        rayDir = wandPos - (wandRot * Eigen::Vector3f(1, 1, 1));
+        rayDir.normalize();
+    }
+
 
     //shoot ray from wandPos in ray direction
     gmGraphics::IntersectionLine wandRay;
     wandRay.forwardRay(wandPos, rayDir); 
     gmGraphics::IntersectionVisitor visitor(wandRay);
     float closestDist = std::numeric_limits<float>::max();
-    //float closestDistance = 9999999;
 
     scenegraph_root->accept(&visitor);
     gmGraphics::ObjRenderer * closestObj = nullptr;
+    gmGraphics::MatrixTransform* closestObjMat = nullptr;
 
     for (const auto &isec : visitor.intersections)
     {
@@ -263,10 +285,16 @@ void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos, const Eigen:
         if (dist < closestDist) {
             closestDist = dist;
             closestObj = dynamic_cast<gmGraphics::ObjRenderer*>(isec.node_path.back());
+
+            gmGraphics::Node* tr = isec.node_path[isec.node_path.size() - 2];
+            // Task 9: take second to last obj which is a transform node for the obj
+            closestObjMat = dynamic_cast<gmGraphics::MatrixTransform*>(tr);
         }
     }
 
-    // Dont know how to handle states properly. Currently check if selectedObj is nullptr and gives us psudo-state
+    //Currently check if selectedObj is nullptr and gives us psudo-state
+    if (grabbing) return;
+
     if (closestObj != selectedObject) {
         if (selectedObject) {
             restoreOriginalMat(*selectedObject);
@@ -275,8 +303,10 @@ void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos, const Eigen:
         if (closestObj) highlightObj(*closestObj);
 
         selectedObject = closestObj;
+        selectedObjTransformMat = closestObjMat;
     }
-}
+}//check Intersection
+
 
 void MyApp::Impl::highlightObj(gmGraphics::ObjRenderer& obj) {
 
@@ -289,14 +319,65 @@ void MyApp::Impl::highlightObj(gmGraphics::ObjRenderer& obj) {
     
     obj.setMaterials({ newMat });
 
-    std::cout << "highlight: " << &obj << std::endl;
+    //std::cout << "highlight: " << &obj << std::endl;
 
 }
 
 void MyApp::Impl::restoreOriginalMat(gmGraphics::ObjRenderer& obj) {
     // Restore the original material
     obj.setMaterials({ originalMaterial });
-    std::cout << "restore: " << &obj << std::endl;
+    //std::cout << "restore: " << &obj << std::endl;
+}
+
+//task 8
+void MyApp::Impl::teleport(const Eigen::Vector3f& direction, const float jumpDist) {
+    //teleport forward jumpDist length and rotate 180 degrees
+    constexpr float PI = 3.1415;
+    Eigen::Quaternionf rott(Eigen::AngleAxisf(PI, Eigen::Vector3f(0, 1, 0)));
+
+    Eigen::Affine3f oldM = nav_transform_node->getTransform();
+    Eigen::Matrix4f M = oldM.matrix();
+    Eigen::Matrix3f M3 = M.topLeftCorner(3, 3);
+    Eigen::Vector3f pos = M.col(3).hnormalized();// translation();
+    Eigen::Quaternionf rot(M3);
+
+    auto newRot = rott * rot;
+    auto newPos = pos - direction.normalized() * jumpDist;
+    nav_transform_node->setPosition(newPos);
+    nav_transform_node->setOrientationCenter(newPos);
+    nav_transform_node->setOrientation(newRot);
+
+
+    ////sync_head_position = *sync_head_position + direction.normalized() * jumpDist;
+    //sync_head_orientation = sync_head_orientation * rot;
+
+    //nav_transform_node->setOrientation(nav_transform_node->getTransform()*rot);
+
+}
+
+//task 9:
+void MyApp::Impl::grabObj() {
+    if (!selectedObject)return;
+    Eigen::Matrix4f Mmodel = selectedObjTransformMat->getMatrix().matrix();
+    Eigen::Matrix4f Mscene = nav_transform_node->getTransform().matrix();
+    Eigen::Matrix4f scWand = Mscene.inverse() * wand_transform_node->getMatrix();
+
+    //initilise upon button press
+    if (!grabbing) {
+        // attach to scene wand
+        Mdelta = scWand.inverse() * Mmodel;
+        //std::cerr << "Mdelta set" << std::endl;
+        grabbing = true;
+
+
+    }
+    //update during button press
+    else {
+        //update new matrix
+        Eigen::Matrix4f newM = scWand * Mdelta;
+        selectedObjTransformMat->setMatrix(newM);
+        //std::cerr << "selectedObjTransformMat set \n" << scWand << std::endl;
+    }
 }
 
 void MyApp::Impl::update(gmCore::Updateable::clock::time_point time, size_t frame) {
@@ -387,9 +468,10 @@ void MyApp::Impl::update_states(gmCore::Updateable::clock::time_point) {
   Eigen::Vector3f eP = *sync_wand_position;
   Eigen::Quaternionf eQ = *sync_wand_orientation;
   Eigen::Vector3f headPos = *sync_head_position;
+  Eigen::Vector3f direction = (eP - headPos);
   
   //task 6
-  checkIntersection(eP, headPos);
+  checkIntersection(eP, headPos , eQ);
 
 
   Eigen::Affine3f M = Eigen::Translation3f(eP) * eQ;
@@ -408,30 +490,43 @@ void MyApp::Impl::update_states(gmCore::Updateable::clock::time_point) {
     wand_object_node->setMaterials(materials);
   }
 
+  //right click pressed
   if (*sync_main_button) {
-      std::cout << "HEJ";
       if (head && wand) {
-          //oldPos + speed * direction;
-          std::cout << "TJOLAHOPP";
 
-          Eigen::Vector3f direction = (eP - headPos).normalized();
-
-          //Task7: speed based on distance from wand to head
-          const float speed = 0.1f;
-
-
-          //Eigen::Affine3f translation = Eigen::Affine3f::Identity();
-          //translation.translate(direction * speed);
-          //auto pos =+ direction * speed;
-          //nav_transform_node->getPosition(); //does not exist
-          //nav_transform_node.getNodes();
+          //works but you get lost very quickly(use low value for jumpDist)
+          //teleport(direction, 1.0f);
+          
           Eigen::Affine3f oldM = nav_transform_node->getTransform();
           auto oldPos = oldM.translation();
-          std::cout << "AAAA: " << oldPos << std::endl;
 
-          nav_transform_node->setPosition(oldPos-direction * speed);
-          
+
+          //Task 10:
+          if(HOMERmode){
+              float moveSpeed = 0.1f;
+              if(*sync_second_button){
+                Eigen::Vector3f moveDirection = direction.normalized() * moveSpeed;
+                nav_transform_node->setPosition(oldPos + moveDirection);
+              }
+          }
+          else {
+              //Task7: speed based on distance from wand to head (lowering speed with arbitrary value)
+
+            const float speedScale = 0.000001f;
+            const float speed = 0.1f + speedScale * direction.norm();
+            direction.normalize();
+
+            nav_transform_node->setPosition(oldPos-direction * speed);
+          }
       }
+  }
+  //task 9:
+  //supposed to be sync_second_button
+  if(*sync_main_button && head && wand) grabObj();
+  if (!*sync_main_button) grabbing = false;
+  if (*sync_menu_button) {
+      HOMERmode = !HOMERmode;  // Toggle HOMER mode
+      std::cerr << "HOMER mode: " << (HOMERmode ? "Enabled" : "Disabled") << std::endl;
   }
 }
 
@@ -466,7 +561,7 @@ void MyApp::Impl::initSG() {
 
     //Loading objects
 
-    const int numObj = 5;
+    const int numObj = 4;
     const std::string Sphere = "urn:gramods:gmGraphics/resources/sphere.obj";
     const std::string Box = "urn:gramods:gmGraphics/resources/box.obj";
 
