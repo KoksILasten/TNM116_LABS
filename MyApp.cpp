@@ -69,6 +69,8 @@ struct MyApp::Impl : public gmCore::Updateable {
 
   //Task 10:
   bool HOMERmode = true;
+  float ratio = 0;
+  void homerObj();
 
   /**
    * From gmCore::Updateable. Automatically called from main() via
@@ -261,20 +263,22 @@ void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos,
     const Eigen::Quaternionf& wandRot)
 {
 
-    Eigen::Vector3f rayDir = (wandPos - headPos).normalized();
-    if (HOMERmode && !grabbing) {
-        rayDir = wandPos - (wandRot * Eigen::Vector3f(1, 1, 1));
-        rayDir.normalize();
-    }
+    if (grabbing) return;
+
+    Eigen::Vector3f rayDir = (wandRot * Eigen::Vector3f(0, 0, -1));
+    rayDir.normalize();
+
+    //if (HOMERmode) {
+    //    rayDir = (wandPos - headPos).normalized();
+    //}
 
 
     //shoot ray from wandPos in ray direction
-    gmGraphics::IntersectionLine wandRay;
-    wandRay.forwardRay(wandPos, rayDir); 
+    gmGraphics::IntersectionLine wandRay = gmGraphics::IntersectionLine::forwardRay(wandPos, rayDir);
     gmGraphics::IntersectionVisitor visitor(wandRay);
     float closestDist = std::numeric_limits<float>::max();
-
     scenegraph_root->accept(&visitor);
+
     gmGraphics::ObjRenderer * closestObj = nullptr;
     gmGraphics::MatrixTransform* closestObjMat = nullptr;
 
@@ -293,17 +297,15 @@ void MyApp::Impl::checkIntersection(const Eigen::Vector3f& wandPos,
     }
 
     //Currently check if selectedObj is nullptr and gives us psudo-state
-    if (grabbing) return;
-
     if (closestObj != selectedObject) {
         if (selectedObject) {
             restoreOriginalMat(*selectedObject);
         }
-
         if (closestObj) highlightObj(*closestObj);
 
         selectedObject = closestObj;
         selectedObjTransformMat = closestObjMat;
+        std::cout << closestObj << std::endl;
     }
 }//check Intersection
 
@@ -346,13 +348,6 @@ void MyApp::Impl::teleport(const Eigen::Vector3f& direction, const float jumpDis
     nav_transform_node->setPosition(newPos);
     nav_transform_node->setOrientationCenter(newPos);
     nav_transform_node->setOrientation(newRot);
-
-
-    ////sync_head_position = *sync_head_position + direction.normalized() * jumpDist;
-    //sync_head_orientation = sync_head_orientation * rot;
-
-    //nav_transform_node->setOrientation(nav_transform_node->getTransform()*rot);
-
 }
 
 //task 9:
@@ -366,7 +361,6 @@ void MyApp::Impl::grabObj() {
     if (!grabbing) {
         // attach to scene wand
         Mdelta = scWand.inverse() * Mmodel;
-        //std::cerr << "Mdelta set" << std::endl;
         grabbing = true;
 
 
@@ -378,6 +372,40 @@ void MyApp::Impl::grabObj() {
         selectedObjTransformMat->setMatrix(newM);
         //std::cerr << "selectedObjTransformMat set \n" << scWand << std::endl;
     }
+}
+
+void MyApp::Impl::homerObj() {
+    //gmGraphics::ObjRenderer* wand_test = &wand_object_node; 
+    if (selectedObject == wand_object_node.get()) return; //this should work but doesnt
+    if (!selectedObject) return;
+    Eigen::Vector3f wandPos = *sync_wand_position;
+    //Eigen::Quaternionf wandRot = *sync_wand_orientation;
+    Eigen::Vector3f headPos = *sync_head_position;
+
+    // a+b/a
+    // a = headtowand length
+    // b = wandtoobject length
+    auto Obj = selectedObjTransformMat->getTransform().matrix();
+    Eigen::Vector3f ObjV = Obj.col(3).hnormalized();
+    Eigen::Vector3f headToWand = (wandPos - headPos);
+    Eigen::Vector3f wandToObj = (ObjV - wandPos);
+            Eigen::Matrix4f newM = Eigen::Matrix4f::Identity();
+
+        if (!grabbing) {
+            ratio = (headToWand.norm() + wandToObj.norm()) / headToWand.norm();
+            grabbing = true;
+            std::cout << "ratio set: " << ratio << std::endl;
+        }
+        else {
+            Eigen::Vector3f newPos = headToWand * ratio;
+            //conversion from matrix4f to affine3f back to matrix4f
+            Eigen::Affine3f aa = Eigen::Affine3f::Identity();
+            aa.translate(newPos);
+            newM = aa.matrix(); //increases every frame :/
+            std::cout << newM << std::endl;
+            selectedObjTransformMat->setMatrix(newM);
+        }
+
 }
 
 void MyApp::Impl::update(gmCore::Updateable::clock::time_point time, size_t frame) {
@@ -499,11 +527,11 @@ void MyApp::Impl::update_states(gmCore::Updateable::clock::time_point) {
           
           Eigen::Affine3f oldM = nav_transform_node->getTransform();
           auto oldPos = oldM.translation();
+          float moveSpeed = 0.1f;
 
 
           //Task 10:
           if(HOMERmode){
-              float moveSpeed = 0.1f;
               if(*sync_second_button){
                 Eigen::Vector3f moveDirection = direction.normalized() * moveSpeed;
                 nav_transform_node->setPosition(oldPos + moveDirection);
@@ -513,7 +541,7 @@ void MyApp::Impl::update_states(gmCore::Updateable::clock::time_point) {
               //Task7: speed based on distance from wand to head (lowering speed with arbitrary value)
 
             const float speedScale = 0.000001f;
-            const float speed = 0.1f + speedScale * direction.norm();
+            const float speed = moveSpeed + speedScale * direction.norm();
             direction.normalize();
 
             nav_transform_node->setPosition(oldPos-direction * speed);
@@ -522,8 +550,15 @@ void MyApp::Impl::update_states(gmCore::Updateable::clock::time_point) {
   }
   //task 9:
   //supposed to be sync_second_button
-  if(*sync_main_button && head && wand) grabObj();
-  if (!*sync_main_button) grabbing = false;
+  if (*sync_main_button && head && wand) {
+      if (!HOMERmode) grabObj();
+      else homerObj();
+  
+  }
+  if (!*sync_main_button && grabbing) {
+      grabbing = false;
+      std::cout << "stopped grabbing" << std::endl;
+  }
   if (*sync_menu_button) {
       HOMERmode = !HOMERmode;  // Toggle HOMER mode
       std::cerr << "HOMER mode: " << (HOMERmode ? "Enabled" : "Disabled") << std::endl;
@@ -571,7 +606,7 @@ void MyApp::Impl::initSG() {
         //Eigen::Vector3f randPos = Eigen::Vector3f::Random(0.0f, 1.0f);
         //Eigen::Vector3f randRot = Eigen::Vector3f::Random(0.1f, 0.3f);
 
-        Eigen::Vector3f randPos = Eigen::Vector3f(i, 0, 0);
+        Eigen::Vector3f randPos = Eigen::Vector3f(i*1.5, 0, 0);
         Eigen::Vector3f randRot = Eigen::Vector3f(0.3,0.3,0.3);
 
         //every other object is sphere
